@@ -11,10 +11,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Resources.zip" />
-  </ItemGroup>
-
-  <ItemGroup>
     <None Include="NuGet\icon.png" Pack="true" PackagePath="" />
   </ItemGroup>
 

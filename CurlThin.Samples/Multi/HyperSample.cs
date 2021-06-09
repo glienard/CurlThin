@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -15,6 +17,9 @@ namespace CurlThin.Samples.Multi
     {
         public void Run()
         {
+            int MaxThreads = 8;
+            DateTime dtStart = DateTime.Now;
+            Console.WriteLine(dtStart);
             if (CurlNative.Init() != CURLcode.OK)
             {
                 throw new Exception("Could not init curl");
@@ -23,10 +28,12 @@ namespace CurlThin.Samples.Multi
             var reqProvider = new MyRequestProvider();
             var resConsumer = new MyResponseConsumer();
 
-            using (var pipe = new HyperPipe<MyRequestContext>(4, reqProvider, resConsumer))
+            using (var pipe = new HyperPipe<MyRequestContext>(MaxThreads, reqProvider, resConsumer))
             {
                 pipe.RunLoopWait();
             }
+            Console.WriteLine($"Took {DateTime.Now.Subtract(dtStart).TotalSeconds} secs using {MaxThreads} threads={DateTime.Now.Subtract(dtStart).TotalSeconds / MaxThreads} secs per request");
+            
         }
     }
 
@@ -59,31 +66,60 @@ namespace CurlThin.Samples.Multi
     /// </summary>
     public class MyRequestProvider : IRequestProvider<MyRequestContext>
     {
-        private readonly int _maxQuestion = 4400050;
-        private int _currentQuestion = 4400000;
+        //private readonly int _maxQuestion = 4400050;
+        //private int _currentQuestion = 4400000;
+        private int _currentItem = 0;
+        private List<string> ips = new List<string>();
+        public MyRequestProvider(string ComputerName="VPS1")
+        {
+            #region Get list of IP addresses
+
+            if (string.IsNullOrEmpty(ComputerName))
+                ComputerName = Environment.MachineName;
+
+            var files = Directory.GetFiles(Directory.GetCurrentDirectory(), $"IPv6-{ComputerName}-*.txt");
+            if (files.Count() == 0)
+            {
+                Console.WriteLine($"IPv6-{ComputerName}-*.txt not found!");
+                return;
+            }
+            string strRegex = @"IPv6\-" + ComputerName + @"\-(?<country>\w{2})\.txt";
+            Regex reGetCountry = new Regex(strRegex, RegexOptions.IgnoreCase);
+            var m = reGetCountry.Match(files[0]);
+            if (!m.Success)
+            {
+                Console.WriteLine($"No country found in {files[0]}");
+                return;
+            }
+            var country = m.Groups["country"].Value;
+            ips = File.ReadAllLines(files[0]).Select(x => x.Trim().ToLower()).Distinct().Take(100).ToList();
+            
+
+            #endregion
+        }
 
         public MyRequestContext Current { get; private set; }
 
         public ValueTask<bool> MoveNextAsync(SafeEasyHandle easy)
         {
             // If question ID is higher than maximum, return false.
-            if (_currentQuestion > _maxQuestion)
+            if (_currentItem >= ips.Count())
             {
                 Current = null;
                 return new ValueTask<bool>(false);
             }
 
             // Create request context. Assign it a label to easily recognize it later.
-            var context = new MyRequestContext($"StackOverflow Question #{_currentQuestion}");
+            var context = new MyRequestContext($"Get from ip  #{_currentItem}: {ips[_currentItem]}");
 
             // Set request URL.
-            CurlNative.Easy.SetOpt(easy, CURLoption.URL, $"https://stackoverflow.com/questions/{_currentQuestion}/");
+            CurlNative.Easy.SetOpt(easy, CURLoption.URL, $"http://icanhazip.com/");
 
             // Follow redirects.
             CurlNative.Easy.SetOpt(easy, CURLoption.FOLLOWLOCATION, 1);
 
             // Set request timeout.
-            CurlNative.Easy.SetOpt(easy, CURLoption.TIMEOUT_MS, 3000);
+            CurlNative.Easy.SetOpt(easy, CURLoption.TIMEOUT_MS, 30000);
 
             // Copy response header (it contains HTTP code and response headers, for example
             // "Content-Type") to MemoryStream in our RequestContext.
@@ -95,8 +131,8 @@ namespace CurlThin.Samples.Multi
 
             // Point the certificate bundle file path to verify HTTPS certificates.
             CurlNative.Easy.SetOpt(easy, CURLoption.CAINFO, CurlResources.CaBundlePath);
-
-            _currentQuestion++;
+            CurlNative.Easy.SetOpt(easy, CURLoption.INTERFACE, "host!"+ips[_currentItem]);
+            _currentItem++;
             Current = context;
             return new ValueTask<bool>(true);
         }
@@ -156,9 +192,10 @@ namespace CurlThin.Samples.Multi
             var html = context.ContentData.ReadAsString();
 
             // Scrape question from HTML source.
-            var match = Regex.Match(html, "<title>(.+?)<\\/");
+            //var match = Regex.Match(html, "<title>(.+?)<\\/");
+            Console.WriteLine($"Effective IP: {html}");
 
-            Console.WriteLine($"Question: {match.Groups[1].Value.Trim()}");
+            //Console.WriteLine($"Question: {match.Groups[1].Value.Trim()}");
             Console.WriteLine("--------");
             Console.WriteLine();
 
